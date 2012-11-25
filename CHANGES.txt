@@ -1,0 +1,7 @@
+Changes:
+
+- Reduced BTN_HOLD_COUNT to 1 (Buttons.h)
+- Added vertical battery indicator (LcdDisplay.c, Icons.c, Icons.h)
+- Changed time settings to 24 hour / days first format (LcdDisplay.c)
+- Changed setting for button from NMI to RST (Background.c)
+

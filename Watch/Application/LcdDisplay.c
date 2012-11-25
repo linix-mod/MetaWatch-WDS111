@@ -133,6 +133,13 @@ static void CopyColumnsIntoMyBuffer(unsigned char const* pImage,
                                     unsigned char StartingColumn,
                                     unsigned char NumberOfColumns);
 
+static void CopyOffsettedColumnsIntoMyBuffer(unsigned char const* pImage,
+                                             unsigned char StartingRow,
+                                             unsigned char NumberOfRows,
+                                             unsigned char StartingColumn,
+                                             unsigned char HorizontalShift,
+                                             unsigned char NumberOfColumns);
+
 static void WriteIcon4w10h(unsigned char const * pIcon,
                            unsigned char RowOffset,
                            unsigned char ColumnOffset);
@@ -140,6 +147,12 @@ static void WriteIcon4w10h(unsigned char const * pIcon,
 static void DisplayAmPm(void);
 static void DisplayDayOfWeek(void);
 static void DisplayDate(void);
+
+static unsigned int ReverseBits(unsigned int n, unsigned int Bits);
+static void DisplayBatteryGauge(unsigned char RowOffset,
+                                unsigned char ColumnOffset,
+                                unsigned char HorizontalShift,
+                                unsigned char Level);
 
 /* the internal buffer */
 #define STARTING_ROW                  ( 0 )
@@ -1346,6 +1359,45 @@ static void CopyRowsIntoMyBuffer(unsigned char const* pImage,
   }
 }
 
+static void CopyOffsettedColumnsIntoMyBuffer(unsigned char const* pImage,
+		                                         unsigned char StartingRow,
+		                                         unsigned char NumberOfRows,
+		                                         unsigned char StartingColumn,
+		                                         unsigned char HorizontalShift,
+		                                         unsigned char NumberOfColumns)
+{
+  unsigned char DestRow = StartingRow;
+  unsigned char RowCounter = 0;
+  unsigned char DestColumn = StartingColumn;
+  unsigned char ColumnCounter = 0;
+  unsigned int SourceIndex = 0;
+  unsigned char c;
+  unsigned char OverflowedBits,t;
+  unsigned int mask = ((1<<HorizontalShift)-1);
+  while ( DestRow < NUM_LCD_ROWS && RowCounter < NumberOfRows )
+  {
+    DestColumn = StartingColumn;
+    ColumnCounter = 0;
+    OverflowedBits = 0;
+    while ( DestColumn < NUM_LCD_COL_BYTES && ColumnCounter < NumberOfColumns )
+    {
+      c = pImage[SourceIndex];
+      c = ReverseBits(c, 8);
+      t = c & mask;
+      c = c >> HorizontalShift;
+      c = c | (OverflowedBits << (8-HorizontalShift));
+      OverflowedBits = t;
+      c = ReverseBits(c, 8);
+      pMyBuffer[DestRow].Data[DestColumn] = c;
+      DestColumn ++;
+      ColumnCounter ++;
+      SourceIndex ++;
+    }
+    DestRow ++;
+    RowCounter ++;
+  }
+}
+
 static void CopyColumnsIntoMyBuffer(unsigned char const* pImage,
                                     unsigned char StartingRow,
                                     unsigned char NumberOfRows,
@@ -1435,60 +1487,81 @@ static void DrawDateTime(unsigned char OnceConnected)
     WriteFontCharacter(lsd);
 
   }
-  else if (OnceConnected) /* now things starting getting fun....*/
+  else
   {
-    if ( GetTimeFormat() == TWELVE_HOUR ) DisplayAmPm();
-    if ( !QueryBluetoothOn() )
-    {
-      CopyColumnsIntoMyBuffer(pBluetoothOffIdlePageIcon,
-                              IDLE_PAGE_ICON_STARTING_ROW,
-                              IDLE_PAGE_ICON_SIZE_IN_ROWS,
-                              IDLE_PAGE_ICON_STARTING_COL,
-                              IDLE_PAGE_ICON_SIZE_IN_COLS);
+
+    unsigned int bV = ReadBatterySenseAverage();
+
+    unsigned int level = 0;
+    if (bV>4100) {
+      level = 20;
+    } else if (bV>3500) {
+      level = 20-((4100-bV)*20/600);
     }
-    else if ( !QueryPhoneConnected() )
+
+    if (OnceConnected) /* now things starting getting fun....*/
     {
-      CopyColumnsIntoMyBuffer(pPhoneDisconnectedIdlePageIcon,
-                              IDLE_PAGE_ICON_STARTING_ROW,
-                              IDLE_PAGE_ICON_SIZE_IN_ROWS,
-                              IDLE_PAGE_ICON_STARTING_COL,
-                              IDLE_PAGE_ICON_SIZE_IN_COLS);
-    }
-    else
-    {
-      if ( QueryBatteryCharging() )
+      if ( GetTimeFormat() == TWELVE_HOUR ) DisplayAmPm();
+
+      if ( !QueryBluetoothOn() )
       {
-        CopyColumnsIntoMyBuffer(pBatteryChargingIdlePageIconType2,
-                                IDLE_PAGE_ICON2_STARTING_ROW,
-                                IDLE_PAGE_ICON2_SIZE_IN_ROWS,
-                                IDLE_PAGE_ICON2_STARTING_COL,
-                                IDLE_PAGE_ICON2_SIZE_IN_COLS);
+        CopyColumnsIntoMyBuffer(pBluetoothOffIdlePageIcon,
+                                IDLE_PAGE_ICON_STARTING_ROW,
+                                IDLE_PAGE_ICON_SIZE_IN_ROWS,
+                                IDLE_PAGE_ICON_STARTING_COL,
+                                IDLE_PAGE_ICON_SIZE_IN_COLS);
+        DisplayBatteryGauge(1,10,2,level);
+
+      }
+      else if ( !QueryPhoneConnected() )
+      {
+        CopyColumnsIntoMyBuffer(pPhoneDisconnectedIdlePageIcon,
+                                IDLE_PAGE_ICON_STARTING_ROW,
+                                IDLE_PAGE_ICON_SIZE_IN_ROWS,
+                                IDLE_PAGE_ICON_STARTING_COL,
+                                IDLE_PAGE_ICON_SIZE_IN_COLS);
+        DisplayBatteryGauge(1,10,2,level);
+
       }
       else
       {
-        unsigned int bV = ReadBatterySenseAverage();
-
-        if ( bV < 3500 )
+        if ( QueryBatteryCharging() )
         {
-          CopyColumnsIntoMyBuffer(pLowBatteryIdlePageIconType2,
+          CopyColumnsIntoMyBuffer(pBatteryChargingIdlePageIconType2,
                                   IDLE_PAGE_ICON2_STARTING_ROW,
                                   IDLE_PAGE_ICON2_SIZE_IN_ROWS,
                                   IDLE_PAGE_ICON2_STARTING_COL,
                                   IDLE_PAGE_ICON2_SIZE_IN_COLS);
+          DisplayBatteryGauge(1,10,2,level);
         }
         else
         {
-          DisplayDayOfWeek();
-          DisplayDate();
+          if ( bV < 3500 )
+          {
+            CopyColumnsIntoMyBuffer(pLowBatteryIdlePageIconType2,
+                                    IDLE_PAGE_ICON2_STARTING_ROW,
+                                    IDLE_PAGE_ICON2_SIZE_IN_ROWS,
+                                    IDLE_PAGE_ICON2_STARTING_COL,
+                                    IDLE_PAGE_ICON2_SIZE_IN_COLS);
+            DisplayBatteryGauge(1,10,2,level);
+          }
+          else
+          {
+            DisplayBatteryGauge(1,10,2,level);
+            DisplayDayOfWeek();
+            DisplayDate();
+          }
         }
       }
     }
-  }
-  else
-  {
-    if ( GetTimeFormat() == TWELVE_HOUR ) DisplayAmPm();
-    DisplayDayOfWeek();
-    DisplayDate();
+    else
+    {
+      if ( GetTimeFormat() == TWELVE_HOUR ) DisplayAmPm();
+      DisplayBatteryGauge(1,10,2,level);
+      DisplayDayOfWeek();
+      DisplayDate();
+    }
+
   }
   
   SendMyBufferToLcd(STARTING_ROW, WATCH_DRAWN_IDLE_BUFFER_ROWS);
@@ -1498,17 +1571,85 @@ static void DisplayAmPm(void)
 {
   int Hour = RTCHOUR;
   unsigned char const *pIcon = ( Hour >= 12 ) ? Pm : Am;
-  WriteIcon4w10h(pIcon,0,8);
+  CopyOffsettedColumnsIntoMyBuffer(pIcon,0,10,7,3,4);
 }
 
 static void DisplayDayOfWeek(void)
 {
   /* row offset = 0 or 10 , column offset = 8 */
   //WriteIcon4w10h(DaysOfWeek[RTCDOW], GetTimeFormat() == TWENTY_FOUR_HOUR ? 0 : 10, 8);
-  gRow = GetTimeFormat() == TWENTY_FOUR_HOUR ? 3 : 13;
-  gColumn = 8;
+  gRow = GetTimeFormat() == TWENTY_FOUR_HOUR ? 3 : 12;
+  gColumn = 7;
   SetFont(MetaWatch7);
+  WriteFontCharacter(' ');
   WriteFontString((tString *)DaysOfTheWeek[GetLanguage()][RTCDOW]);
+}
+
+/* reverses bits */
+static unsigned int ReverseBits(unsigned int n, unsigned int Bits)
+{
+  unsigned int i, nrev;       // nrev will store the bit-reversed pattern
+  unsigned int mask = 1<<Bits;   // find N: shift left 1 by the number of bits
+  nrev = n;
+  for(i=1; i<Bits; i++)
+  {
+    n >>= 1;
+    nrev <<= 1;
+    nrev |= n & 1;   // give LSB of n to nrev
+  }
+  nrev &= mask-1;         // clear all bits more significant than N-1
+  return nrev;
+}
+
+/* displays a battery gauge */
+static void DisplayBatteryGauge(unsigned char RowOffset,
+                                unsigned char ColumnOffset,
+                                unsigned char HorizontalShift,
+                                unsigned char level)
+{
+  unsigned char pIcon[36*2];
+  unsigned char c;
+  unsigned int row;
+  unsigned int col;
+
+  // Fill it depending on the level(0-19)
+  for (row=0;row<36;row++) {
+    for (col=0;col<2;col++) {
+      c=pBatteryGaugeIcon[row*2+col];
+      c=ReverseBits(c,8);
+      if ((row>=6)&&(row<=25-level)) {
+        if (col==0) c=c^0x1F;
+        if (col==1) c=c^0xF0;
+      }
+      c=ReverseBits(c,8);
+      pIcon[row*2+col]=c;
+    }
+  }
+
+  // Show full battery gauge
+  CopyOffsettedColumnsIntoMyBuffer(pIcon,RowOffset,36,ColumnOffset,HorizontalShift,2);
+
+  /* If the battery is charging, blink the icon
+  if (QueryBatteryCharging()) {
+    int Seconds = GetRTCSEC();
+    if (Seconds % 2 == 1) {
+      return;
+    }
+  }
+
+  // Fill it depending on the level(0-24)
+  for (int r=2;r<8;r++) {
+    unsigned char c=3;
+    signed char bit=3;
+    for (int l=0;l<level;l++) {
+        pMyBuffer[RowOffset+r].Data[ColumnOffset+c] |= (1<<bit);
+        bit--;
+        if (bit<0) {
+          c--;
+          bit=7;
+        }
+    }
+  }*/
 }
 
 static void DisplayDate(void)
@@ -1531,14 +1672,15 @@ static void DisplayDate(void)
     }
 
     /* make it line up with AM/PM and Day of Week */
-    gRow = 22;
-    gColumn = 8;
+    gRow = 21;
+    gColumn = 7;
     gBitColumnMask = BIT1;
     SetFont(MetaWatch7);
 
     /* add year when time is in 24 hour mode */
     if ( GetTimeFormat() == TWENTY_FOUR_HOUR )
     {
+      WriteFontCharacter(' ');
       int year = RTCYEAR;
       WriteFontCharacter(year/1000+'0');
       year %= 1000;
@@ -1550,13 +1692,22 @@ static void DisplayDate(void)
       gRow = 12;
     }
 
-    gColumn = 8;
+    //First = 12;
+    //Second = 99;
+
+    //gColumn = 8;
+    gColumn = 7;
     gBitColumnMask = BIT1;
-    WriteFontCharacter(First/10+'0');
+    WriteFontCharacter(' ');
+    if (First/10 != 0)
+      WriteFontCharacter(First/10+'0');
     WriteFontCharacter(First%10+'0');
     WriteFontCharacter(GetDateFormat() == MONTH_FIRST ? '/' : '.');
-    WriteFontCharacter(Second/10+'0');
+    if (Second/10 != 0)
+      WriteFontCharacter(Second/10+'0');
     WriteFontCharacter(Second%10+'0');
+    if (GetDateFormat() == DAY_FIRST)
+    	WriteFontCharacter('.');
 
   }
 }
@@ -1670,19 +1821,32 @@ const unsigned char pMetaWatchSplash[SPLASH_ROWS * NUM_LCD_COL_BYTES] =
 
 const unsigned char Am[10*4] =
 {
-  0x00,0x00,0x9C,0xA2,0xA2,0xA2,0xBE,0xA2,0xA2,0x00,
-  0x00,0x00,0x08,0x0D,0x0A,0x08,0x08,0x08,0x08,0x00,
-  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+  0x00,0x00,0x00,0x00,
+  0x00,0x00,0x00,0x00,
+  0x9C,0x08,0x00,0x00,
+  0xA2,0x0D,0x00,0x00,
+  0xA2,0x0A,0x00,0x00,
+  0xA2,0x08,0x00,0x00,
+  0xBE,0x08,0x00,0x00,
+  0xA2,0x08,0x00,0x00,
+  0xA2,0x08,0x00,0x00,
+  0x00,0x00,0x00,0x00,
 };
 
 const unsigned char Pm[10*4] =
 {
-  0x00,0x00,0x9E,0xA2,0xA2,0x9E,0x82,0x82,0x82,0x00,
-  0x00,0x00,0x08,0x0D,0x0A,0x08,0x08,0x08,0x08,0x00,
-  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+  0x00,0x00,0x00,0x00,
+  0x00,0x00,0x00,0x00,
+  0x9E,0x08,0x00,0x00,
+  0xA2,0x0D,0x00,0x00,
+  0xA2,0x0A,0x00,0x00,
+  0x9E,0x08,0x00,0x00,
+  0x82,0x08,0x00,0x00,
+  0x82,0x08,0x00,0x00,
+  0x82,0x08,0x00,0x00,
+  0x00,0x00,0x00,0x00
 };
+
 /*
 const unsigned char DaysOfWeek[7][10*4] =
 {

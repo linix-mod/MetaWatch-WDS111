@@ -80,6 +80,7 @@ extern const unsigned char pBatteryChargingStatusScreenIcon[36*4];
 extern const unsigned char pBatteryLowStatusScreenIcon[36*4];
 extern const unsigned char pBatteryFullStatusScreenIcon[36*4];
 extern const unsigned char pBatteryMediumStatusScreenIcon[36*4];
+extern const unsigned char pBatteryGaugeIcon[36*2];
 
 #define IDLE_PAGE_ICON_STARTING_ROW ( 10 )
 #define IDLE_PAGE_ICON_STARTING_COL ( 8 )

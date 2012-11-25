@@ -713,7 +713,7 @@ static void NvalOperationHandler(tMessage* pMsg)
 
 void InitializeRstNmiConfiguration(void)
 {
-  unsigned char RstControl = RST_PIN_DISABLED;
+  unsigned char RstControl = RST_PIN_ENABLED;
   OsalNvItemInit(NVID_RSTNMI_CONFIGURATION, sizeof(RstControl), &RstControl);
   ConfigRstPin(RstControl);
 }

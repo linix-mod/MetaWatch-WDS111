@@ -143,13 +143,13 @@ static unsigned char nvLanguage;
 
 void InitializeTimeFormat(void)
 {
-  nvTimeFormat = TWELVE_HOUR;
+  nvTimeFormat = TWENTY_FOUR_HOUR;
   OsalNvItemInit(NVID_TIME_FORMAT, sizeof(nvTimeFormat), &nvTimeFormat);
 }
 
 void InitializeDateFormat(void)
 {
-  nvDateFormat = MONTH_FIRST;
+  nvDateFormat = DAY_FIRST;
   OsalNvItemInit(NVID_DATE_FORMAT, sizeof(nvDateFormat), &nvDateFormat);
 }
 
