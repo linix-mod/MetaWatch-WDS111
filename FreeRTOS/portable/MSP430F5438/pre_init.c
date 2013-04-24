@@ -29,6 +29,13 @@ extern long   _stack;
 extern long   end;
 extern long   __STACK_END;
 
+// Overwrite the _lock and _unlock functions
+// The default ones in the runtime support library hang up
+extern void *_lock;
+void __lock() { }
+extern void *_unlock;
+void __unlock() { }
+
 int _system_pre_init(void)
 {
    unsigned char *dest;
@@ -42,6 +49,9 @@ int _system_pre_init(void)
 
    length = (int)((long)&__STACK_END - (long)&_stack);
    memset(&_stack, 0x5A, (length-32));
+
+   _lock=__lock;
+   _unlock=__unlock;
 
    return 1;
 }
