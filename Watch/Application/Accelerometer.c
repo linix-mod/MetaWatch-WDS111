@@ -172,7 +172,8 @@ void InitializeAccelerometer(void)
   SidAddr = KIONIX_XOUT_L;
   SidLength = XYZ_DATA_LENGTH;
   
-  AccelerometerDisable();
+  //AccelerometerDisable();
+  AccelerometerEnable();
   ACCELEROMETER_INT_ENABLE();
   
   PrintString("Accelerometer Init Complete\r\n");   

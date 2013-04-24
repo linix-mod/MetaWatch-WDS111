@@ -83,6 +83,8 @@ static void WriteTxBuffer(tString * const pBuf)
   unsigned char i = 0;
   unsigned int LocalCount = TxCount;
  
+  return;
+
   /* if there isn't enough room in the buffer then characters are lost */
   while ( pBuf[i] != 0 && LocalCount < TX_BUFFER_SIZE )
   { 
