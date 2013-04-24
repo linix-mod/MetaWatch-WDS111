@@ -537,14 +537,67 @@
 #define BT_CLK_REQ_PDIR     ( P1DIR )
 #define BT_CLK_REQ_POUT     ( P1OUT )
 #define BT_CLK_REQ_PIN      ( BIT4 )
+#define BT_CLK_REQ_CONFIG() { BT_CLK_REQ_PDIR &= ~BT_CLK_REQ_PIN; }
 
 #define BT_IO1_PDIR     ( P1DIR )
 #define BT_IO1_POUT     ( P1OUT )
 #define BT_IO1_PIN      ( BIT5 )
 
+#define BT_IO1_CONFIG() { \
+  BT_IO1_PDIR |= BT_IO1_PIN;  \
+  BT_IO1_POUT &= ~BT_IO1_PIN; \
+}
+
 #define BT_IO2_PDIR     ( P1DIR )
 #define BT_IO2_POUT     ( P1OUT )
 #define BT_IO2_PIN      ( BIT6 )
+
+#define BT_IO2_CONFIG() { \
+  BT_IO2_PDIR |= BT_IO2_PIN; \
+  BT_IO2_POUT &= ~BT_IO2_PIN; }
+
+#define BLUETOOTH_SIDEBAND_CONFIG() \
+{                      \
+  BT_CLK_REQ_CONFIG(); \
+  BT_IO1_CONFIG();     \
+  BT_IO2_CONFIG();     \
+}
+
+#define BT_RST_SEL    ( P10SEL )
+#define BT_RST_PDIR   ( P10DIR )
+#define BT_RST_POUT   ( P10OUT )
+#define BT_RST_PIN    ( BIT3 )
+
+#define BT_CTRL_VECTOR  ( PORT1_VECTOR )
+#define BT_CTRL_PREN  ( P1REN )
+#define BT_CTRL_PDIR  ( P1DIR )
+#define BT_CTRL_POUT  ( P1OUT )
+#define BT_CTRL_PIN   ( P1IN )
+#define BT_CTRL_SEL   ( P1SEL )
+#define BT_CTRL_IES   ( P1IES )
+#define BT_CTRL_IFG   ( P1IFG )
+#define BT_CTRL_IE    ( P1IE )
+#define BT_CTRL_IV    ( P1IV )
+#define BT_CTS_PIN    ( BIT3 )
+#define BT_RTS_PIN    ( BIT0 )
+
+#define BT_COMM_PDIR  ( P5DIR )
+#define BT_COMM_POUT  ( P5OUT )
+#define BT_COMM_SEL   ( P5SEL )
+#define BT_TX_PIN   ( BIT6 )
+#define BT_RX_PIN   ( BIT7 )
+
+#define BT_UART_CTL0  ( UCA1CTL0 )
+#define BT_UART_CTL1  ( UCA1CTL1 )
+#define BT_UART_BR0   ( UCA1BR0 )
+#define BT_UART_BR1   ( UCA1BR1 )
+#define BT_UART_MCTL  ( UCA1MCTL )
+#define BT_UART_IE    ( UCA1IE )
+#define BT_UART_IV    ( UCA1IV )
+#define BT_UART_RXBUF ( UCA1RXBUF )
+#define BT_UART_TXBUF ( UCA1TXBUF )
+#define BT_UART_VECTOR  ( USCI_A1_VECTOR )
+
 
 /******************************************************************************/
 

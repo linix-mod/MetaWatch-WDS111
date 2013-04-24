@@ -104,11 +104,19 @@ MEMORY
 SECTIONS
 {
     .bss       : {} fill = 0, > RAM      /* GLOBAL & STATIC VARS              */
-//  .sysmem    : {} > RAM                /* DYNAMIC MEMORY ALLOCATION AREA    */
+    .sysmem    : {} > RAM                /* DYNAMIC MEMORY ALLOCATION AREA    */
     .stack     : {} > RAM (HIGH)         /* SOFTWARE SYSTEM STACK             */
 
     .text      : {}>> FLASH | FLASH2     /* CODE                              */
     .text:_isr : {} > FLASH              /* ISR CODE SPACE                    */
+
+    // Ensure that the lock/unlock functions are in RAM
+    // This is required to override them
+    .text:_lock : {} > RAM
+    .text:_unlock : {} > RAM
+    .text:__lock : {} > RAM
+    .text:__unlock : {} > RAM
+
     .cinit     : {} > FLASH              /* INITIALIZATION TABLES             */
 //#ifdef (__LARGE_DATA_MODEL__)
 //  .const     : {} > FLASH | FLASH2     /* CONSTANT DATA                     */

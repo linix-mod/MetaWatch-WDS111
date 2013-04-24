@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <projectDescription>
-	<name>Public</name>
+	<name>MetawatchWithBTStack</name>
 	<comment></comment>
 	<projects>
 	</projects>
@@ -102,9 +102,9 @@
 			<locationURI>PARENT-2-PROJECT_LOC/OSAL</locationURI>
 		</link>
 		<link>
-			<name>Patch</name>
+			<name>Stack</name>
 			<type>2</type>
-			<locationURI>PARENT-2-PROJECT_LOC/Patch</locationURI>
+			<locationURI>PARENT-2-PROJECT_LOC/Stack</locationURI>
 		</link>
 	</linkedResources>
 </projectDescription>
