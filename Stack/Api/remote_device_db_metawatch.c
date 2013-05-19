@@ -184,8 +184,7 @@ static uint8_t persistent_rfcomm_channel(char *serviceName){
     return max_channel;
 }
 
-
-const remote_device_db_t remote_device_db_memory = {
+const remote_device_db_t remote_device_db_metawatch = {
     db_open,
     db_close,
     get_link_key,

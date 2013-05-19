@@ -38,11 +38,12 @@
 
 #include <msp430x54x.h>
 #include <stdlib.h>
+#include <hal_lpm.h>
 #include "hal_compat.h"
 
 #include <btstack/hal_tick.h>
 
-static void dummy_handler(void){};
+static void dummy_handler(void) { };
 
 static void (*tick_handler)(void) = &dummy_handler;
 
@@ -52,30 +53,28 @@ static void (*tick_handler)(void) = &dummy_handler;
 #define TIMER_COUNTDOWN 8192
 
 void hal_tick_init(void){
-    TA1CCTL0 = CCIE;                   // CCR0 interrupt enabled
-    TA1CTL = TASSEL_1 | MC_2 | TACLR;  // use ACLK (32768), contmode, clear TAR
-    TA1CCR0 = TIMER_COUNTDOWN;    // -> 1/4 s
+  TB0CCTL0 = CCIE;                   // CCR0 interrupt enabled
+  TB0CTL = TBSSEL__ACLK | CNTL__16 | TBCLGRP_0 | MC_2 | TBCLR;  // use ACLK (32768), contmode, clear TR
+  TB0CCR0 = TIMER_COUNTDOWN;         // -> 1/4 s
 }
 
 void hal_tick_set_handler(void (*handler)(void)){
-    if (handler == NULL){
-        tick_handler = &dummy_handler;
-        return;
-    }
-    tick_handler = handler;
+  if (handler == NULL){
+    tick_handler = &dummy_handler;
+    return;
+  }
+  tick_handler = handler;
 }
 
 int  hal_tick_get_tick_period_in_ms(void){
-    return 250;
+  return 250;
 }
 
 // Timer A1 interrupt service routine
-#pragma vector=TIMER1_A0_VECTOR
+#pragma vector=TIMER0_B0_VECTOR
 __interrupt
-void timerA0ISR(void){
-    TA1CCR0 += TIMER_COUNTDOWN;
-    (*tick_handler)();
-    
-    // force exit low power mode
-    __bic_SR_register_on_exit(LPM0_bits);   // Exit active CPU
+void timerB0ISR(void){
+  TB0CCR0 += TIMER_COUNTDOWN;
+  (*tick_handler)();
+  EXIT_LPM_ISR();
 }

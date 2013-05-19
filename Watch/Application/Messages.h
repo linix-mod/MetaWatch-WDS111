@@ -294,7 +294,8 @@ typedef enum
   AccelerometerSetupMsg = 0xe6,
 
   RadioPowerControlMsg = 0xf0,
-  AdvertisingDataMsg = 0xf1
+  AdvertisingDataMsg = 0xf1,
+  TriggerBTStackRunLoopMsg = 0xf2
 
 } eMessageType;
 

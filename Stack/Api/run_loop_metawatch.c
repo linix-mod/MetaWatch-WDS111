@@ -51,6 +51,15 @@
  *
  */
 
+#include "FreeRTOS.h"
+#include "semphr.h"
+#include "task.h"
+#include "queue.h"
+#include "portmacro.h"
+
+#include "Messages.h"
+#include "MessageQueues.h"
+#include "BufferPool.h"
 
 #include <btstack/run_loop.h>
 #include <btstack/linked_list.h>
@@ -69,63 +78,49 @@ static linked_list_t timers;
 
 #ifdef HAVE_TICK
 static uint32_t system_ticks;
+static uint32_t processed_ticks=0;
+static uint32_t generated_ticks=0;
 #endif
-
-static int trigger_event_received = 0;
-
-/**
- * trigger run loop iteration
- */
-void embedded_trigger(void){
-    trigger_event_received = 1;
-}
 
 /**
  * Add data_source to run_loop
  */
-void embedded_add_data_source(data_source_t *ds){
-    linked_list_add(&data_sources, (linked_item_t *) ds);
+void embedded_run_loop_add_data_source(data_source_t *ds){
+  linked_list_add(&data_sources, (linked_item_t *) ds);
 }
 
 /**
  * Remove data_source from run loop
  */
-int embedded_remove_data_source(data_source_t *ds){
-    return linked_list_remove(&data_sources, (linked_item_t *) ds);
+int embedded_run_loop_remove_data_source(data_source_t *ds){
+  return linked_list_remove(&data_sources, (linked_item_t *) ds);
 }
 
 /**
  * Add timer to run_loop (keep list sorted)
  */
-void embedded_add_timer(timer_source_t *ts){
-#ifdef HAVE_TICK
-    linked_item_t *it;
-    for (it = (linked_item_t *) &timers; it->next ; it = it->next){
-        if (ts->timeout < ((timer_source_t *) it->next)->timeout) {
-            break;
-        }
-    }
-    ts->item.next = it->next;
-    it->next = (linked_item_t *) ts;
-    // log_info("Added timer %x at %u\n", (int) ts, (unsigned int) ts->timeout.tv_sec);
-    // embedded_dump_timer();
-#endif
+void embedded_run_loop_add_timer(timer_source_t *ts){
+  linked_item_t *it;
+  for (it = (linked_item_t *) &timers; it->next ; it = it->next){
+      if (ts->timeout < ((timer_source_t *) it->next)->timeout) {
+          break;
+      }
+  }
+  ts->item.next = it->next;
+  it->next = (linked_item_t *) ts;
+  // log_info("Added timer %x at %u\n", (int) ts, (unsigned int) ts->timeout.tv_sec);
+  // embedded_run_loop_dump_timer();
 }
 
 /**
  * Remove timer from run loop
  */
-int embedded_remove_timer(timer_source_t *ts){
-#ifdef HAVE_TICK    
-    // log_info("Removed timer %x at %u\n", (int) ts, (unsigned int) ts->timeout.tv_sec);
-    return linked_list_remove(&timers, (linked_item_t *) ts);
-#else
-    return 0;
-#endif
+int embedded_run_loop_remove_timer(timer_source_t *ts){
+  // log_info("Removed timer %x at %u\n", (int) ts, (unsigned int) ts->timeout.tv_sec);
+  return linked_list_remove(&timers, (linked_item_t *) ts);
 }
 
-void embedded_dump_timer(void){
-#ifdef HAVE_TICK
+void embedded_run_loop_dump_timer(void){
 #ifdef ENABLE_LOG_INFO 
     linked_item_t *it;
     int i = 0;
@@ -134,84 +129,79 @@ void embedded_dump_timer(void){
         log_info("timer %u, timeout %u\n", i, (unsigned int) ts->timeout);
     }
 #endif
-#endif
 }
 
 /**
  * Execute run_loop
  */
-void embedded_execute(void) {
-    data_source_t *ds;
+void embedded_run_loop_execute(void) {
+  data_source_t *ds;
 
-    while (1) {
+  // process data sources
+  data_source_t *next;
+  for (ds = (data_source_t *) data_sources; ds != NULL ; ds = next){
+    next = (data_source_t *) ds->item.next; // cache pointer to next data_source to allow data source to remove itself
+    ds->process(ds);
+  }
 
-        // process data sources
-        data_source_t *next;
-        for (ds = (data_source_t *) data_sources; ds != NULL ; ds = next){
-            next = (data_source_t *) ds->item.next; // cache pointer to next data_source to allow data source to remove itself
-            ds->process(ds);
-        }
-        
-#ifdef HAVE_TICK
-        // process timers
-        while (timers) {
-            timer_source_t *ts = (timer_source_t *) timers;
-            if (ts->timeout > system_ticks) break;
-            run_loop_remove_timer(ts);
-            ts->process(ts);
-        }
-#endif
-        
-        // disable IRQs and check if run loop iteration has been requested. if not, go to sleep
-        hal_cpu_disable_irqs();
-        if (trigger_event_received){
-            hal_cpu_enable_irqs_and_sleep();
-            continue;
-        }
-        hal_cpu_enable_irqs();
-    }
+  // process timers
+  while (timers) {
+    timer_source_t *ts = (timer_source_t *) timers;
+    if (ts->timeout > system_ticks) break;
+    run_loop_remove_timer(ts);
+    ts->process(ts);
+  }
+
+  // Update the processing time
+  processed_ticks=system_ticks;
 }
 
-#ifdef HAVE_TICK
-static void embedded_tick_handler(void){
-    system_ticks++;
-    trigger_event_received = 1;
+void embedded_trigger(void){
+  tMessage Msg;
+  SetupMessage(&Msg,TriggerBTStackRunLoopMsg,NO_MSG_OPTIONS);
+  SendMessageToQueueFromIsr(SPP_TASK_QINDEX,&Msg);
+}
+
+static void embedded_run_loop_tick_handler(void){
+  system_ticks++;
+  if (processed_ticks>=generated_ticks) {
+    generated_ticks=system_ticks;
+    embedded_trigger();
+  }
 }
 
 uint32_t embedded_get_ticks(void){
-    return system_ticks;
+  return system_ticks;
 }
 
 uint32_t embedded_ticks_for_ms(uint32_t time_in_ms){
-    return time_in_ms / hal_tick_get_tick_period_in_ms();
+  return time_in_ms / 250;
 }
 
 // set timer
 void run_loop_set_timer(timer_source_t *ts, uint32_t timeout_in_ms){
-    uint32_t ticks = embedded_ticks_for_ms(timeout_in_ms);
-    if (ticks == 0) ticks++;
-    ts->timeout = system_ticks + ticks; 
+  uint32_t ticks = embedded_ticks_for_ms(timeout_in_ms);
+  if (ticks == 0) ticks++;
+  ts->timeout = system_ticks + ticks;
 }
-#endif
 
-void embedded_init(void){
-
-    data_sources = NULL;
+void embedded_run_loop_init(void){
+  data_sources = NULL;
 
 #ifdef HAVE_TICK
-    timers = NULL;
-    system_ticks = 0;
-    hal_tick_init();
-    hal_tick_set_handler(&embedded_tick_handler);
+  timers = NULL;
+  system_ticks = 0;
+  hal_tick_init();
+  hal_tick_set_handler(&embedded_run_loop_tick_handler);
 #endif
 }
 
 const run_loop_t run_loop_embedded = {
-    &embedded_init,
-    &embedded_add_data_source,
-    &embedded_remove_data_source,
-    &embedded_add_timer,
-    &embedded_remove_timer,
-    &embedded_execute,
-    &embedded_dump_timer
+  &embedded_run_loop_init,
+  &embedded_run_loop_add_data_source,
+  &embedded_run_loop_remove_data_source,
+  &embedded_run_loop_add_timer,
+  &embedded_run_loop_remove_timer,
+  &embedded_run_loop_execute,
+  &embedded_run_loop_dump_timer
 };

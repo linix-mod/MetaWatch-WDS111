@@ -7,12 +7,6 @@
 #include "hal_compat.h"
 #include <msp430x54x.h>
 
-// __delay_cycles is limited
-void waitAboutOneSecond(void){
-    int i;
-    for (i=0;i<1000;i++) __delay_cycles(16000);
-}
-
 /* access far text for MSP430X platform
 #if defined(__GNUC__) && (__MSP430X__ > 0)
 

@@ -56,12 +56,15 @@
 #include "OSAL_Nv.h"
 #include "NvIds.h"
 
+static unsigned int ResetCause;
+
 void main(void)
 {
   /* Turn off the watchdog timer */
   WDTCTL = WDTPW + WDTHOLD;
 
   /* clear reason for reset */
+  ResetCause = SYSRSTIV;
   SYSRSTIV = 0;
 
   /* disable DMA during read-modify-write cycles */

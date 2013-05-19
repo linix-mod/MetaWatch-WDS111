@@ -60,6 +60,8 @@
 #include <btstack/hci_cmds.h>
 #include <btstack/run_loop.h>
 #include <btstack/sdp_util.h>
+#include <btstack/version.h>
+#include <run_loop_private.h>
 
 #include "hci.h"
 #include "l2cap.h"
@@ -69,301 +71,243 @@
 #include "sdp.h"
 #include "config.h"
 #include "bt_control_cc256x.h"
+#include "spp.h"
 
 #include <stdarg.h>
 #include <stdio.h>
 
-enum CONNECTION_MODE { ACTIVE=0, HOLD=1, SNIFF=2, PARK=3 } ;
-enum STATE {INIT, W4_CONNECTION, W4_CHANNEL_COMPLETE, W4_ACTIVE} ;
+#define SPP_MSG_QUEUE_LEN   8
+#define SPP_STACK_SIZE    (configMINIMAL_STACK_SIZE + 200)
+#define SPP_TASK_PRIORITY   (tskIDLE_PRIORITY + 2)
 
-static uint8_t   rfcomm_channel_nr = 1;
-static uint16_t  rfcomm_mtu;
-static uint16_t  rfcomm_connection_handle;
-static uint16_t  rfcomm_channel_id;
-static enum CONNECTION_MODE rfcomm_connection_mode = ACTIVE;
-static uint8_t   spp_service_buffer[100];
-static uint16_t  sniff_max_interval = 1600;  // time unit: 0.625us
-static uint16_t  sniff_min_interval = 1344;
-static uint16_t  sniff_return_timeout = 1000; // time unit: ms
-static uint16_t  sniff_attempt = 10;
-static uint16_t  sniff_timeout = 10;
-static timer_source_t sniff_timer;
-static uint8_t   first_time = 1;
+static tMessage SPPMsg;
 
-static enum STATE state = INIT;
+static etConnectionState ConnectionState = Unknown;
+static uint8_t Discoverable=0;
 
-// Flag to enable packet dumps
-int btstack_enable_dump_mode=0;
+xTaskHandle xSPPTaskHandle;
 
-// Next data to sent
-uint8_t *tx_data;
-uint16_t tx_data_len = 0;
-uint16_t tx_data_max_len = 0;
-
-// Activates a new timer
-static void run_loop_register_timer(timer_source_t *timer, uint16_t period) {
-  run_loop_set_timer(timer, period);
-  run_loop_remove_timer(timer);
-  run_loop_add_timer(timer);
+/*! Sends a connection state message */
+void ConnectionStateChanged(etConnectionState CS) {
+  tMessage OutgoingMsg;
+  ConnectionState=CS;
+  SetupMessage(&OutgoingMsg, ConnectionStateChangeMsg, CS);
+  RouteMsg(&OutgoingMsg);
 }
 
-// Sets active mode
-static void transit_to_active_mode()
+/*! Sets the visibility of the device */
+void SetDiscoverability(unsigned char Value) {
+  hci_discoverable_control(Value);
+  Discoverable=Value;
+}
+
+/*! Handle the messages routed to the SPP task */
+static unsigned char SPPMessageHandler(tMessage* pMsg)
 {
-  // If sniff mode is on, request active mode
-  if (rfcomm_connection_mode == SNIFF) {
-    if (hci_can_send_packet_now(HCI_COMMAND_DATA_PACKET)) {
-      hci_send_cmd(&hci_exit_sniff_mode,rfcomm_connection_handle);
-    }
-  }
-  // In active mode, ensure that return to sniff timeout is updated
-  if (rfcomm_connection_mode == ACTIVE) {
-    run_loop_register_timer(&sniff_timer, sniff_return_timeout);
-  }
-}
+  tMessage OutgoingMsg;
 
-// Sets sniff mode
-static void transit_to_sniff_mode()
-{
-  if (rfcomm_connection_mode == ACTIVE) {
-    if (hci_can_send_packet_now(HCI_COMMAND_DATA_PACKET)) {
-      hci_send_cmd(&hci_sniff_mode,rfcomm_connection_handle,sniff_max_interval,sniff_min_interval,sniff_attempt,sniff_timeout);
-    }
-    run_loop_register_timer(&sniff_timer,sniff_return_timeout);
-  }
-}
-
-// Send routine
-static void try_to_send(void){
-
-  if (!rfcomm_channel_id) return;
-  if (tx_data_len==0) return;
-
-  // Set active mode
-  transit_to_active_mode();
-
-  // TODO: split packets according to mtu
-  int err = rfcomm_send_internal(rfcomm_channel_id, tx_data, tx_data_len);
-
-  switch (err){
-    case 0:
-      tx_data_len=0;
-    case BTSTACK_ACL_BUFFERS_FULL:
+  switch(pMsg->Type)
+  {
+    case TriggerBTStackRunLoopMsg:
+      run_loop_execute();
       break;
-    default:
+
+    case TurnRadioOnMsg:
+      hci_power_control(HCI_POWER_ON);
+      SetDiscoverability(1);
+      ConnectionStateChanged(Initializing);
       break;
-  }
-}
 
-// Bluetooth packet handler
-static void packet_handler(void * connection, uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size)
-{
-  bd_addr_t event_addr;
-  uint8_t event = packet[0];
-  uint16_t connection_handle;
-  uint8_t current_mode;
-  uint8_t status;
-  uint16_t interval;
+    case TurnRadioOffMsg:
+      SetDiscoverability(0);
+      ConnectionStateChanged(Initializing);
+      hci_power_control(HCI_POWER_OFF);
+      break;
 
-  // Handle data packets
-  if (packet_type == RFCOMM_DATA_PACKET) {
+    case GetDeviceTypeResponse:
+      btstack_queue_tx_packet(pMsg);
+      return 0;
 
-    // Set active mode
-    transit_to_active_mode();
+    // TODO: Check how the other states are reached
 
-    // hack: truncate data (we know that the packet is at least on byte bigger
-    packet[size] = 0;
-    //puts( (const char *) packet);
-    if (tx_data) {
-      strcpy(tx_data, packet);
-      tx_data_len=strlen(tx_data)+1;
-      try_to_send();
-    }
-    rfcomm_grant_credits(rfcomm_channel_id, 1); // get the next packet
-    return;
-  }
-
-  // handle events, ignore data
-  if (packet_type != HCI_EVENT_PACKET) return;
-
-  switch(state) {
-    case INIT:
-      switch(event){
-        case BTSTACK_EVENT_STATE:
-          // bt stack activated, get started - set local name
-          if (packet[2] == HCI_STATE_WORKING) {
-            hci_send_cmd(&hci_write_local_name, "MetaWatch Digital WDS112 (BTStack)");
-            btstack_enable_dump_mode=0;
-            state=W4_CONNECTION;
-            puts("BTStack initialized");
-          }
+/*
+    case PairingControlMsg:
+      switch (pMsg->Options) {
+        case PAIRING_CONTROL_OPTION_ENABLE_PAIRING:
+          break;
+        case PAIRING_CONTROL_OPTION_DISABLE_PAIRING:
+          break;
+        case PAIRING_CONTROL_OPTION_SAVE_SPP:
+          break;
+        case PAIRING_CONTROL_OPTION_TOGGLE_SSP:
           break;
         default:
+          PrintStringAndHex("<<Unhandled PairingControlMsg Option>> in SPP Task: 0x", pMsg->Options);
           break;
       }
+      update hci_discoverable depending on visibility status
+      sent ConnectionStateChangeMsg
+      break;
+*/
+
+/*
+
+      
+    case GetInfoStringResponse:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
       break;
 
-    case W4_CONNECTION:
-      switch(event){
-        case HCI_EVENT_PIN_CODE_REQUEST:
-          // inform about pin code request
-          //printf("Pin code request - using '0000'\n\r");
-          bt_flip_addr(event_addr, &packet[2]);
-          hci_send_cmd(&hci_pin_code_request_reply, &event_addr, 4, "0000");
-          break;
-        case RFCOMM_EVENT_INCOMING_CONNECTION:
-          // data: event (8), len(8), address(48), channel (8), rfcomm_cid (16)
-          bt_flip_addr(event_addr, &packet[2]);
-          rfcomm_channel_nr = packet[8];
-          rfcomm_channel_id = READ_BT_16(packet, 9);
-          //printf("RFCOMM channel %u requested for %s\n\r", rfcomm_channel_nr, bd_addr_to_str(event_addr));
-          rfcomm_accept_connection_internal(rfcomm_channel_id);
-          state = W4_CHANNEL_COMPLETE;
-          break;
-        default:
-          break;
-      }
+    case DiagnosticLoopback:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
       break;
 
-    case W4_CHANNEL_COMPLETE:
-      if ( event != RFCOMM_EVENT_OPEN_CHANNEL_COMPLETE ) break;
-
-      // data: event(8), len(8), status (8), address (48), handle (16), server channel(8), rfcomm_cid(16), max frame size(16)
-      if (packet[2]) {
-        //printf("RFCOMM channel open failed, status %u\n\r", packet[2]);
-        break;
-      }
-      rfcomm_connection_handle = READ_BT_16(packet, 9);
-      rfcomm_channel_id = READ_BT_16(packet, 12);
-      rfcomm_mtu = READ_BT_16(packet, 14);
-      tx_data_max_len = rfcomm_mtu;
-      if (!(tx_data=malloc(tx_data_max_len))) {
-        puts("ERROR: Can not allocate memory for tx buffer!");
-      }
-
-      // Setup sniff mode
-      rfcomm_connection_mode=ACTIVE;
-      transit_to_sniff_mode();
-
-      //printf("\n\rRFCOMM channel open succeeded. New RFCOMM Channel ID %u, max frame size %u\n\r", rfcomm_channel_id, rfcomm_mtu);
-      puts("RFCOMM channel opened");
-      state = W4_ACTIVE;
+    case EnterShippingModeMsg:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
+      break;
+      
+    case ConnectionTimeoutMsg:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
       break;
 
-    case W4_ACTIVE:
-      switch(event){
-        case HCI_EVENT_MODE_CHANGE_EVENT:
-          // Todo: find out if sniff mode is active
-          // data: event (8), len (8), status (8), handle (16), current_mode (8), interval (16)
-          connection_handle = READ_BT_16(packet, 3);
-          if (connection_handle==rfcomm_connection_handle) {
-            status = packet[2];
-            if (status!=0) {
-              //puts("ERROR: Mode change command failed!");
-            }
-            current_mode = packet[5];
-            interval = READ_BT_16(packet,6);
-            //printf("current_mode=%d interval=%d\n",current_mode,interval);
-            switch (current_mode) {
-              case 0:
-                // Ensure that sniff mode is re-activated after timeout
-                rfcomm_connection_mode = ACTIVE;
-                run_loop_register_timer(&sniff_timer,sniff_return_timeout);
-                break;
-              case 2:
-                rfcomm_connection_mode = SNIFF;
-                if (first_time) {
-                  strcpy(tx_data, "Test3");
-                  tx_data_len=strlen(tx_data)+1;
-                  try_to_send();
-                  first_time = 0;
-                }
-                break;
-              default:
-                puts("ERROR: Unsupported connection mode!");
-            }
-          }
-          break;
-        case DAEMON_EVENT_HCI_PACKET_SENT:
-        case RFCOMM_EVENT_CREDITS:
-          try_to_send();
-          break;
-        case RFCOMM_EVENT_CHANNEL_CLOSED:
-          rfcomm_channel_id = 0;
-          state = W4_CONNECTION;
-          free(tx_data);
-          tx_data=NULL;
-          puts("RFCOMM channel closed");
-          break;
-        case HCI_EVENT_COMMAND_STATUS:
-        case HCI_EVENT_NUMBER_OF_COMPLETED_PACKETS:
-        case HCI_EVENT_READ_REMOTE_VERSION_INFORMATION_COMPLETE:
-        case 0x73:
-          break;
-        default:
-          printf("WARNING: unknown event 0x%02x received!\n",event);
-          break;
-      }
+    case ReadRssiMsg:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
       break;
+
+    case PairingControlMsg:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
+      break;
+
+    case ReadRssiResponseMsg:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
+      break;
+
+    case SniffControlMsg:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
+      break;
+
+    case GetRealTimeClockResponse:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
+      break;
+
+    case StatusChangeEvent:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
+      break;
+
+    case NvalOperationResponseMsg:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
+      break;
+
+    case GeneralPurposePhoneMsg:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
+      break;
+
+    case ButtonEventMsg:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
+      break;
+
+    case AccelerometerHostMsg:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
+      break;
+
+    case QueryMemoryMsg:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
+      break;
+
+    case LowBatteryWarningMsgHost:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
+      break;
+
+    case LowBatteryBtOffMsgHost:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
+      break;
+
+    case ReadBatteryVoltageResponse:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
+      break;
+
+    case ReadLightSensorResponse:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
+      break;
+
+    case AdvertisingDataMsg:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
+      break;
+
+    case CallbackTimeoutMsg:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
+      break;
+
+    case RadioPowerControlMsg:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
+      break;
+
+    case UpdateConnParameterMsg:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
+      break;
+
+*/
 
     default:
+      PrintStringAndHex("<<Unhandled Message>> in SPP Task: Type 0x", pMsg->Type);
       break;
   }
+  return 1;
 }
 
-/*! Initaliaze the serial port profile task.  This should be called from main.
+/*! Function to implement the SPPTask loop
+ *
+ * \param pvParameters not used
+ *
+ */
+static void SPPTask(void *pvParameters)
+{
+  // Check that the queue was created
+  if ( QueueHandles[SPP_TASK_QINDEX] == 0 )
+  {
+    PrintString("SPP Queue not created!\r\n");
+  }
+
+  // Init the bluetooth stack
+  btstack_init();
+
+  // TODO: Adapt all hal_* files to power down handling (especially dma))
+
+  // Message loop
+  for(;;)
+  {
+    // Check for messages
+    if( pdTRUE == xQueueReceive(QueueHandles[SPP_TASK_QINDEX],
+                                &SPPMsg, portMAX_DELAY ) )
+    {
+      PrintMessageType(&SPPMsg);
+      if (SPPMessageHandler(&SPPMsg))
+        SendToFreeQueue(&SPPMsg);
+      CheckStackUsage(xSPPTaskHandle,"SPP Task");
+      CheckQueueUsage(QueueHandles[SPP_TASK_QINDEX]);
+    }
+
+  }
+
+}
+
+/*! Initialize the serial port profile task.  This should be called from main.
 *
 * This task opens the stack which in turn creates 3 more tasks that create and
 * handle the bluetooth serial port connection.
 */
 void InitializeWrapperTask(void)
 {
-  /// GET STARTED with BTstack ///
-  btstack_memory_init();
-  run_loop_init(RUN_LOOP_EMBEDDED);
+  // Init queue for communication with the firmware
+  QueueHandles[SPP_TASK_QINDEX] =
+    xQueueCreate( SPP_MSG_QUEUE_LEN, MESSAGE_QUEUE_ITEM_SIZE );
 
-  // init HCI
-  hci_transport_t    * transport = hci_transport_h4_dma_instance();
-  bt_control_t       * control   = bt_control_cc256x_instance();
-  hci_uart_config_t  * config    = hci_uart_config_cc256x_instance();
-  remote_device_db_t * remote_db = (remote_device_db_t *) &remote_device_db_memory;
-  hci_init(transport, config, control, remote_db);
-
-  // use eHCILL
-  bt_control_cc256x_enable_ehcill(1);
-
-  // init L2CAP
-  l2cap_init();
-  l2cap_register_packet_handler(packet_handler);
-
-  // init RFCOMM
-  rfcomm_init();
-  rfcomm_register_packet_handler(packet_handler);
-  rfcomm_register_service_with_initial_credits_internal(NULL, rfcomm_channel_nr, 100, 1);  // reserved channel, mtu=100, 1 credit
-
-  // init SDP, create record for SPP and register with SDP
-  sdp_init();
-  memset(spp_service_buffer, 0, sizeof(spp_service_buffer));
-  service_record_item_t * service_record_item = (service_record_item_t *) spp_service_buffer;
-  sdp_create_spp_service( (uint8_t*) &service_record_item->service_record, 1, "MW-SPP");
-  sdp_register_service_internal(NULL, service_record_item);
-
-  // Init sniff mode timer
-  sniff_timer.process = &transit_to_sniff_mode;
-
-  // ready - enable irq used in h4 task
-  __enable_interrupt();
-
-  // turn on!
-  hci_power_control(HCI_POWER_ON);
-
-  // make discoverable
-  hci_discoverable_control(1);
-
-  // go!
-  run_loop_execute();
-
-  // TODO: Adapt all hal_* files to power down handling (especially dma))
+  // prams are: task function, task name, stack len , task params, priority, task handle
+  xTaskCreate(SPPTask,
+              (const signed char *)"SPP",
+              SPP_STACK_SIZE,
+              NULL,
+              SPP_TASK_PRIORITY,
+              &xSPPTaskHandle);
 }
 
 
@@ -376,16 +320,16 @@ void InitializeWrapperTask(void)
 */
 unsigned char SerialPortReadyToSleep(void)
 {
-  return 0;
+  return 1;
 }
 
 /*! Return a pointer to the wrapper version string */
 tVersion GetWrapperVersion(void)
 {
   tVersion version;
-  version.pBtVer = "BTSTK ?.?-?";
+  version.pBtVer = "BTS " BTSTACK_VERSION;
   version.pHwVer = "SPP 2560";
-  version.pSwVer = "?";
+  version.pSwVer = "0.1";
   return version;
 }
 
@@ -396,7 +340,13 @@ tVersion GetWrapperVersion(void)
 */
 unsigned char QueryPhoneConnected(void)
 {
-  return 0;
+  switch(ConnectionState) {
+    case BRConnected:
+    case LEConnected:
+      return 1;
+    default:
+      return 0;
+  }
 }
 
 /*! This function is used to determine if the radio is on and will return 1 when
@@ -407,7 +357,15 @@ unsigned char QueryPhoneConnected(void)
 */
 unsigned char QueryBluetoothOn(void)
 {
-  return 0;
+  switch(ConnectionState) {
+    case RadioOn:
+    case Paired:
+    case BRConnected:
+    case LEConnected:
+      return 1;
+    default:
+      return 0;
+  }
 }
 
 /*! This function is used to determine if the connection state of the
@@ -417,7 +375,13 @@ unsigned char QueryBluetoothOn(void)
  */
 etConnectionState QueryConnectionState(void)
 {
-  return Unknown;
+  switch(ConnectionState) {
+    case BRConnected:
+    case LEConnected:
+      return Paired;
+    default:
+      return ConnectionState;
+  }
 }
 
 /*! Query Bluetooth Discoverability
@@ -426,7 +390,7 @@ etConnectionState QueryConnectionState(void)
  */
 unsigned char QueryDiscoverable(void)
 {
-  return 0;
+  return Discoverable;
 }
 
 /*! Query Bluetooth Connectability
@@ -435,7 +399,7 @@ unsigned char QueryDiscoverable(void)
  */
 unsigned char QueryConnectable(void)
 {
-  return 0;
+  return 1;
 }
 
 /*! Query Bluetooth Secure Simple Pairing Setting
@@ -479,33 +443,40 @@ void QueryLinkKeys(unsigned char Index,
 /*! Query the state of the AutoSniffEnabled register
  * \return 1 if Sniff is Enabled, 0 otherwise
  */
+/*
 unsigned char QueryAutoSniffEnabled(void)
 {
   return 0;
 }
+*/
 
 /*!
  * \param DelayMs is the delay for entering sniff mode
  */
+/*
 void SetSniffModeEntryDelay(unsigned int DelayMs)
 {
 }
+*/
 
+/*
 etSniffState QuerySniffState(void)
 {
   return PhoneNotConnected;
 }
+*/
 
 /*! Allow access to the 4 sniff parameters
  *
  * \param SniffSlotType is the parameter type
  * \param Slots is the new parameter value in slots
  */
+/*
 void SetSniffSlotParameter(eSniffSlotType SniffSlotType,unsigned int Slots)
 {
 
 }
-
+*/
 
 /*! \return The sniff Slot parameter
  *

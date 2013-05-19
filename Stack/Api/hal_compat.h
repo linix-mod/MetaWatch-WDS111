@@ -11,8 +11,6 @@
 
 #include <stdint.h>
 
-void waitAboutOneSecond(void);
-
 // single byte read
 uint8_t FlashReadByte (uint32_t addr);
 

@@ -96,7 +96,10 @@ void PrintQueueNameIsFull(unsigned char Qindex)
   case FREE_QINDEX:        PrintString("Shoud not get here\r\n");   break;
   case BACKGROUND_QINDEX:  PrintString("Background Q is full\r\n"); break;
   case DISPLAY_QINDEX:     PrintString("Display Q is full\r\n");    break;
-  case SPP_TASK_QINDEX:    PrintString("Spp Task Q is full\r\n");   break;
+  case SPP_TASK_QINDEX:
+    PrintString("Spp Task Q is full\r\n");
+    puts("Spp Task Q is full");
+    break;
   default:                 PrintString("Unknown Q is full\r\n");    break;
   }
 
@@ -289,6 +292,7 @@ void PrintMessageType(tMessage* pMsg)
   case CallbackTimeoutMsg:         /*PrintStringAndHexByte("CallbackTimeoutMsg 0x",MessageType);*/         break;
   case SetCallbackTimerMsg:        /*PrintStringAndHexByte("SetCallbackTimerMsg 0x",MessageType);*/        break;
   case UpdateConnParameterMsg:     PrintStringAndHexByte("UpdateConnParameterMsg 0x",MessageType);     break;
+  case TriggerBTStackRunLoopMsg:     PrintStringAndHexByte("TriggerBTStackRunLoopMsg 0x",MessageType);     break;
   default:                         PrintStringAndHexByte("Unknown Message Type 0x",MessageType);       break;
   }  
 }
