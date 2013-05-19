@@ -5,5 +5,6 @@ Changes:
 - Changed time settings to 24 hour / days first format (LcdDisplay.c)
 - Changed setting for button from NMI to RST (Background.c)
 - Enabled accelerometer for light enable (Accelerometer.c)
-- Replaced bluetooth stack by the latest one from the MetaWatchGen2 repository (Stack2.lib, as of 26.01.2013)
+- Replaced bluetooth stack by BTStack
 - Debug output via UART disabled
+
